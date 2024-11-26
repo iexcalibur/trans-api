@@ -8,6 +8,7 @@ interface OpenAIError {
   status?: number;
   response?: {
     data: unknown;
+    status?: number;
   };
 }
 
@@ -19,6 +20,7 @@ interface ProcessError {
 export async function POST(request: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
+      console.error('OpenAI API key missing');
       return NextResponse.json(
         { error: 'OpenAI API key is not configured', success: false },
         { status: 500 }
@@ -29,45 +31,42 @@ export async function POST(request: NextRequest) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
+    // Get form data
+    const formData = await request.formData();
+    const audioFile = formData.get('audio') as File;
+
+    if (!audioFile) {
+      console.error('No audio file in request');
+      return NextResponse.json(
+        { error: 'No audio file provided', success: false },
+        { status: 400 }
+      );
+    }
+
+    // Validate file size (10MB limit for Whisper API)
+    if (audioFile.size > 10 * 1024 * 1024) {
+      return NextResponse.json(
+        { error: 'Audio file size exceeds 10MB limit', success: false },
+        { status: 400 }
+      );
+    }
+
+    // Convert and process file
+    const audioBytes = await audioFile.arrayBuffer();
+    const buffer = Buffer.from(audioBytes);
+    
+    // Create a File object that OpenAI can process
+    const file = new File([buffer], 'audio.webm', { 
+      type: audioFile.type || 'audio/webm'
+    });
+
+    console.log('Processing file:', {
+      size: file.size,
+      type: file.type,
+      name: file.name
+    });
+
     try {
-      // Get form data
-      const formData = await request.formData();
-      const audioFile = formData.get('audio') as File;
-
-      if (!audioFile) {
-        return NextResponse.json(
-          { error: 'No audio file provided', success: false },
-          { status: 400 }
-        );
-      }
-
-      // Convert the audio file to a buffer
-      const audioBytes = await audioFile.arrayBuffer();
-      
-      // Create a readable stream from the buffer
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(Buffer.from(audioBytes));
-          controller.close();
-        },
-      });
-
-      // Create a response from the stream
-      const response = new Response(stream);
-      const blob = await response.blob();
-      
-      // Create a File object that OpenAI can process
-      const file = new File([blob], 'audio.webm', { 
-        type: 'audio/webm'
-      });
-
-      console.log('Processing file:', {
-        size: file.size,
-        type: file.type,
-        name: file.name
-      });
-
-      // Send to OpenAI API
       const transcription = await openai.audio.transcriptions.create({
         file: file,
         model: 'whisper-1',
@@ -76,7 +75,6 @@ export async function POST(request: NextRequest) {
       });
 
       console.log('Transcription successful');
-
       return NextResponse.json({
         text: transcription.text,
         success: true
@@ -84,16 +82,33 @@ export async function POST(request: NextRequest) {
 
     } catch (openaiError) {
       const error = openaiError as OpenAIError;
-      console.error('OpenAI API error:', error);
+      console.error('OpenAI API error:', {
+        message: error.message,
+        status: error.status,
+        response: error.response
+      });
+      
+      // Handle specific OpenAI error cases
+      if (error.status === 413) {
+        return NextResponse.json({
+          error: 'File too large for processing',
+          success: false
+        }, { status: 413 });
+      }
+
       return NextResponse.json({
         error: 'OpenAI API error',
         details: error.message,
         success: false
-      }, { status: 500 });
+      }, { status: error.status || 500 });
     }
   } catch (error) {
     const processError = error as ProcessError;
-    console.error('General error:', processError);
+    console.error('General error:', {
+      message: processError.message,
+      stack: processError.stack
+    });
+    
     return NextResponse.json({
       error: 'Error processing audio file',
       details: processError.message,
