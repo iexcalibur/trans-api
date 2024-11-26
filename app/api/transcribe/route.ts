@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { IncomingForm, Files } from 'formidable';
 import { promises as fs } from 'fs';
 import OpenAI from 'openai';
 import { createReadStream } from 'fs';
 import path from 'path';
 import { writeFile } from 'fs/promises';
 import { headers } from 'next/headers';
+
+// Define error types
+interface OpenAIError {
+  message: string;
+  status?: number;
+  response?: {
+    data: unknown;
+  };
+}
+
+interface ProcessError {
+  message: string;
+  stack?: string;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -52,25 +65,29 @@ export async function POST(request: NextRequest) {
       });
 
       // Clean up
-      await fs.unlink(filePath).catch(console.error);
+      await fs.unlink(filePath).catch((err: Error) => {
+        console.error('Error cleaning up temp file:', err);
+      });
 
       return NextResponse.json({
         text: transcription.text,
         success: true
       });
-    } catch (openaiError: any) {
-      console.error('OpenAI API error:', openaiError);
+    } catch (openaiError) {
+      const error = openaiError as OpenAIError;
+      console.error('OpenAI API error:', error);
       return NextResponse.json({
         error: 'OpenAI API error',
-        details: openaiError.message,
+        details: error.message,
         success: false
       }, { status: 500 });
     }
-  } catch (error: any) {
-    console.error('General error:', error);
+  } catch (error) {
+    const processError = error as ProcessError;
+    console.error('General error:', processError);
     return NextResponse.json({
       error: 'Error processing audio file',
-      details: error.message,
+      details: processError.message,
       success: false
     }, { status: 500 });
   }
@@ -79,8 +96,8 @@ export async function POST(request: NextRequest) {
 export async function OPTIONS() {
   const allowedOrigins = [
     'http://localhost:4200',
-    'https://adaratranslate.com',  // Replace with your production domain
-    'https://your-angular-app.com' // Add any other domains you need
+    'https://adaratranslate.com',
+    'https://your-angular-app.com'
   ];
 
   const headersList = await headers();

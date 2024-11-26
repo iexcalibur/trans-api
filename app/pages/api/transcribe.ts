@@ -1,9 +1,23 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import { IncomingForm, Files } from 'formidable';
+import { IncomingForm, Files, Fields } from 'formidable';
 import { promises as fs } from 'fs';
 import OpenAI from 'openai';
 import { createReadStream } from 'fs';
 import path from 'path';
+
+// Define error types
+interface OpenAIError {
+  message: string;
+  status?: number;
+  response?: {
+    data: unknown;
+  };
+}
+
+interface ProcessError {
+  message: string;
+  stack?: string;
+}
 
 export const config = {
   api: {
@@ -58,13 +72,13 @@ export default async function handler(
     });
 
     console.log('Parsing form data...');
-    const [fields, files] = await new Promise<[any, Files]>((resolve, reject) => {
+    const [, files] = await new Promise<[Fields, Files]>((resolve, reject) => {
       form.parse(req, (err, fields, files) => {
         if (err) {
           console.error('Form parsing error:', err);
           reject(err);
         }
-        console.log('Form parsed successfully:', { fields, files });
+        console.log('Form parsed successfully:', { files });
         resolve([fields, files]);
       });
     });
@@ -106,7 +120,7 @@ export default async function handler(
       console.log('Transcription successful:', transcription);
 
       // Clean up
-      await fs.unlink(audioFile.filepath).catch(err => {
+      await fs.unlink(audioFile.filepath).catch((err: Error) => {
         console.error('Error deleting temp file:', err);
       });
 
@@ -114,28 +128,30 @@ export default async function handler(
         text: transcription.text,
         success: true 
       });
-    } catch (openaiError: any) {
+    } catch (openaiError) {
+      const error = openaiError as OpenAIError;
       console.error('OpenAI API error:', {
-        message: openaiError.message,
-        status: openaiError.status,
-        response: openaiError.response?.data
+        message: error.message,
+        status: error.status,
+        response: error.response?.data
       });
       return res.status(500).json({ 
         error: 'OpenAI API error',
-        details: openaiError.message,
-        response: openaiError.response?.data,
+        details: error.message,
+        response: error.response?.data,
         success: false
       });
     }
-  } catch (error: any) {
+  } catch (error) {
+    const processError = error as ProcessError;
     console.error('General error:', {
-      message: error.message,
-      stack: error.stack
+      message: processError.message,
+      stack: processError.stack
     });
     return res.status(500).json({ 
       error: 'Error processing audio file',
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      details: processError.message,
+      stack: process.env.NODE_ENV === 'development' ? processError.stack : undefined,
       success: false
     });
   }
