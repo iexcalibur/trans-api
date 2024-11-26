@@ -29,38 +29,53 @@ export async function POST(request: NextRequest) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Get form data
-    const formData = await request.formData();
-    const audioFile = formData.get('audio') as File;
-
-    if (!audioFile) {
-      return NextResponse.json(
-        { error: 'No audio file provided', success: false },
-        { status: 400 }
-      );
-    }
-
     try {
+      // Get form data
+      const formData = await request.formData();
+      const audioFile = formData.get('audio') as File;
+
+      if (!audioFile) {
+        return NextResponse.json(
+          { error: 'No audio file provided', success: false },
+          { status: 400 }
+        );
+      }
+
       // Convert the audio file to a buffer
-      const audioData = await audioFile.arrayBuffer();
+      const audioBytes = await audioFile.arrayBuffer();
       
-      // Create a Blob with the correct MIME type
-      const audioBlob = new Blob([audioData], { type: audioFile.type });
+      // Create a readable stream from the buffer
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(Buffer.from(audioBytes));
+          controller.close();
+        },
+      });
+
+      // Create a response from the stream
+      const response = new Response(stream);
+      const blob = await response.blob();
       
       // Create a File object that OpenAI can process
-      const openAIFile = new File(
-        [audioBlob],
-        'audio.webm',
-        { type: 'audio/webm' }
-      );
+      const file = new File([blob], 'audio.webm', { 
+        type: 'audio/webm'
+      });
+
+      console.log('Processing file:', {
+        size: file.size,
+        type: file.type,
+        name: file.name
+      });
 
       // Send to OpenAI API
       const transcription = await openai.audio.transcriptions.create({
-        file: openAIFile,
+        file: file,
         model: 'whisper-1',
         response_format: 'json',
         language: 'en'
       });
+
+      console.log('Transcription successful');
 
       return NextResponse.json({
         text: transcription.text,
