@@ -1,9 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
 import OpenAI from 'openai';
-import { createReadStream } from 'fs';
-import path from 'path';
-import { writeFile } from 'fs/promises';
 import { headers } from 'next/headers';
 
 // Define error types
@@ -33,10 +29,6 @@ export async function POST(request: NextRequest) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Create temp directory
-    const tmpDir = path.join(process.cwd(), 'tmp');
-    await fs.mkdir(tmpDir, { recursive: true });
-
     // Get form data
     const formData = await request.formData();
     const audioFile = formData.get('audio') as File;
@@ -48,25 +40,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create a temporary file path
-    const filePath = path.join(tmpDir, `upload-${Date.now()}.webm`);
-    
-    // Write the file to disk
-    const bytes = await audioFile.arrayBuffer();
-    await writeFile(filePath, Buffer.from(bytes));
-
     try {
-      // Transcribe the audio
+      // Convert File to Buffer
+      const arrayBuffer = await audioFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Create a Blob from the buffer
+      const blob = new Blob([buffer], { type: audioFile.type });
+      
+      // Create a File object that OpenAI can use
+      const file = new File([blob], audioFile.name, {
+        type: audioFile.type,
+        lastModified: audioFile.lastModified,
+      });
+
+      // Send to OpenAI
       const transcription = await openai.audio.transcriptions.create({
-        file: createReadStream(filePath),
+        file: file,
         model: 'whisper-1',
         response_format: 'json',
         language: 'en'
-      });
-
-      // Clean up
-      await fs.unlink(filePath).catch((err: Error) => {
-        console.error('Error cleaning up temp file:', err);
       });
 
       return NextResponse.json({
