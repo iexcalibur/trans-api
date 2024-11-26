@@ -41,9 +41,22 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      // Send directly to OpenAI without saving to disk
+      // Convert the audio file to a buffer
+      const audioData = await audioFile.arrayBuffer();
+      
+      // Create a Blob with the correct MIME type
+      const audioBlob = new Blob([audioData], { type: audioFile.type });
+      
+      // Create a File object that OpenAI can process
+      const openAIFile = new File(
+        [audioBlob],
+        'audio.webm',
+        { type: 'audio/webm' }
+      );
+
+      // Send to OpenAI API
       const transcription = await openai.audio.transcriptions.create({
-        file: audioFile, // Send the File object directly
+        file: openAIFile,
         model: 'whisper-1',
         response_format: 'json',
         language: 'en'
@@ -53,6 +66,7 @@ export async function POST(request: NextRequest) {
         text: transcription.text,
         success: true
       });
+
     } catch (openaiError) {
       const error = openaiError as OpenAIError;
       console.error('OpenAI API error:', error);
@@ -76,8 +90,7 @@ export async function POST(request: NextRequest) {
 export async function OPTIONS() {
   const allowedOrigins = [
     'http://localhost:4200',
-    'https://adaratranslate.com',
-    'https://your-angular-app.com'
+    'https://adaratranslate.com'
   ];
 
   const headersList = await headers();
