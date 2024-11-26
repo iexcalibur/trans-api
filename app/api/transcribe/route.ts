@@ -41,22 +41,9 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      // Convert File to Buffer
-      const arrayBuffer = await audioFile.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-
-      // Create a Blob from the buffer
-      const blob = new Blob([buffer], { type: audioFile.type });
-      
-      // Create a File object that OpenAI can use
-      const file = new File([blob], audioFile.name, {
-        type: audioFile.type,
-        lastModified: audioFile.lastModified,
-      });
-
-      // Send to OpenAI
+      // Send directly to OpenAI without saving to disk
       const transcription = await openai.audio.transcriptions.create({
-        file: file,
+        file: audioFile, // Send the File object directly
         model: 'whisper-1',
         response_format: 'json',
         language: 'en'
