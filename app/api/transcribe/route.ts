@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { headers } from 'next/headers';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
 
 // Define error types
 interface OpenAIError {
@@ -17,6 +19,12 @@ interface ProcessError {
   stack?: string;
 }
 
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export async function POST(request: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -31,66 +39,68 @@ export async function POST(request: NextRequest) {
       apiKey: process.env.OPENAI_API_KEY,
     });
 
-    // Get form data
-    const formData = await request.formData();
-    const audioFile = formData.get('audio') as File;
-
-    if (!audioFile) {
-      console.error('No audio file in request');
-      return NextResponse.json(
-        { error: 'No audio file provided', success: false },
-        { status: 400 }
-      );
-    }
-
     try {
-      // Log file details
+      const formData = await request.formData();
+      const audioFile = formData.get('audio') as File;
+
+      if (!audioFile) {
+        console.error('No audio file in request');
+        return NextResponse.json(
+          { error: 'No audio file provided', success: false },
+          { status: 400 }
+        );
+      }
+
       console.log('Received audio file:', {
         name: audioFile.name,
         size: audioFile.size,
         type: audioFile.type
       });
 
-      // Validate file size
       if (audioFile.size > 10 * 1024 * 1024) {
-        console.error('File size too large:', audioFile.size);
         return NextResponse.json(
           { error: 'Audio file size exceeds 10MB limit', success: false },
           { status: 400 }
         );
       }
 
-      // Convert to ArrayBuffer first
-      const arrayBuffer = await audioFile.arrayBuffer();
-      console.log('Converted to ArrayBuffer:', { byteLength: arrayBuffer.byteLength });
+      // Convert to Buffer
+      const bytes = await audioFile.arrayBuffer();
+      const buffer = Buffer.from(bytes);
 
-      // Create a new File object
-      const file = new File(
-        [arrayBuffer],
-        audioFile.name || 'audio.webm',
-        { type: audioFile.type || 'audio/webm' }
-      );
+      // Create a temporary file
+      const tempDir = '/tmp';
+      const fileName = `audio-${Date.now()}.webm`;
+      const filePath = join(tempDir, fileName);
 
-      console.log('Created new File object:', {
-        size: file.size,
-        type: file.type,
-        name: file.name
-      });
+      try {
+        // Write the buffer to a temporary file
+        await writeFile(filePath, buffer);
+        console.log('Temporary file created:', filePath);
 
-      // Attempt transcription
-      console.log('Starting OpenAI transcription...');
-      const transcription = await openai.audio.transcriptions.create({
-        file: file,
-        model: 'whisper-1',
-        response_format: 'json',
-        language: 'en',
-      });
+        // Send to OpenAI
+        const transcription = await openai.audio.transcriptions.create({
+          file: await import('fs').then(fs => fs.createReadStream(filePath)),
+          model: 'whisper-1',
+          response_format: 'json',
+          language: 'en'
+        });
 
-      console.log('Transcription successful');
-      return NextResponse.json({
-        text: transcription.text,
-        success: true,
-      });
+        console.log('Transcription successful');
+
+        return NextResponse.json({
+          text: transcription.text,
+          success: true
+        });
+
+      } finally {
+        // Clean up
+        try {
+          await import('fs').then(fs => fs.promises.unlink(filePath));
+        } catch (e) {
+          console.error('Error cleaning up temp file:', e);
+        }
+      }
 
     } catch (openaiError) {
       const error = openaiError as OpenAIError;
@@ -101,27 +111,23 @@ export async function POST(request: NextRequest) {
         code: error.code
       });
 
-      // More specific error response
       return NextResponse.json({
         error: 'OpenAI API error',
         details: error.message,
-        status: error.status,
-        success: false,
+        success: false
       }, { status: error.status || 500 });
     }
   } catch (error) {
     const processError = error as ProcessError;
     console.error('General error:', {
       message: processError.message,
-      stack: processError.stack,
-      error: processError
+      stack: processError.stack
     });
 
     return NextResponse.json({
       error: 'Error processing audio file',
       details: processError.message,
-      stack: process.env.NODE_ENV === 'development' ? processError.stack : undefined,
-      success: false,
+      success: false
     }, { status: 500 });
   }
 }
