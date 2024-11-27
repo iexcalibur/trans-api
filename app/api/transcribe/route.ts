@@ -1,23 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
 import { headers } from 'next/headers';
-import { writeFile } from 'fs/promises';
-import { join } from 'path';
-
-// Define error types
-interface OpenAIError {
-  message: string;
-  status?: number;
-  response?: {
-    data: unknown;
-  };
-  code?: string;
-}
-
-interface ProcessError {
-  message: string;
-  stack?: string;
-}
 
 export const config = {
   api: {
@@ -35,13 +17,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-    });
-
     try {
       const formData = await request.formData();
-      const audioFile = formData.get('audio') as File;
+      const audioFile = formData.get('audio') as Blob;
 
       if (!audioFile) {
         console.error('No audio file in request');
@@ -52,7 +30,6 @@ export async function POST(request: NextRequest) {
       }
 
       console.log('Received audio file:', {
-        name: audioFile.name,
         size: audioFile.size,
         type: audioFile.type
       });
@@ -64,51 +41,41 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Convert to Buffer
-      const bytes = await audioFile.arrayBuffer();
-      const buffer = Buffer.from(bytes);
+      // Prepare form data for OpenAI API
+      const formDataForApi = new FormData();
+      formDataForApi.append('file', audioFile, 'audio.webm');
+      formDataForApi.append('model', 'whisper-1');
+      formDataForApi.append('response_format', 'verbose_json');
 
-      // Create a temporary file
-      const tempDir = '/tmp';
-      const fileName = `audio-${Date.now()}.webm`;
-      const filePath = join(tempDir, fileName);
+      // Make direct API call to OpenAI
+      const transcriptionResponse = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        },
+        body: formDataForApi,
+      });
 
-      try {
-        // Write the buffer to a temporary file
-        await writeFile(filePath, buffer);
-        console.log('Temporary file created:', filePath);
-
-        // Send to OpenAI
-        const transcription = await openai.audio.transcriptions.create({
-          file: await import('fs').then(fs => fs.createReadStream(filePath)),
-          model: 'whisper-1',
-          response_format: 'json',
-          language: 'en'
-        });
-
-        console.log('Transcription successful');
-
-        return NextResponse.json({
-          text: transcription.text,
-          success: true
-        });
-
-      } finally {
-        // Clean up
-        try {
-          await import('fs').then(fs => fs.promises.unlink(filePath));
-        } catch (e) {
-          console.error('Error cleaning up temp file:', e);
-        }
+      if (!transcriptionResponse.ok) {
+        const errorData = await transcriptionResponse.json();
+        console.error('Transcription API Error:', errorData);
+        throw new Error(`Transcription API error: ${errorData.error?.message || 'Unknown error'}`);
       }
 
-    } catch (openaiError) {
-      const error = openaiError as OpenAIError;
+      const transcriptionData = await transcriptionResponse.json();
+      console.log('Transcription data:', transcriptionData);
+
+      return NextResponse.json({
+        text: transcriptionData.text,
+        language: transcriptionData.language,
+        success: true
+      });
+
+    } catch (error: any) {
       console.error('OpenAI API error:', {
         message: error.message,
         status: error.status,
-        response: error.response,
-        code: error.code
+        response: error.response
       });
 
       return NextResponse.json({
@@ -117,16 +84,15 @@ export async function POST(request: NextRequest) {
         success: false
       }, { status: error.status || 500 });
     }
-  } catch (error) {
-    const processError = error as ProcessError;
+  } catch (error: any) {
     console.error('General error:', {
-      message: processError.message,
-      stack: processError.stack
+      message: error.message,
+      stack: error.stack
     });
 
     return NextResponse.json({
       error: 'Error processing audio file',
-      details: processError.message,
+      details: error.message,
       success: false
     }, { status: 500 });
   }
@@ -138,8 +104,8 @@ export async function OPTIONS() {
     'https://adaratranslate.com'
   ];
 
-  const headersList = await headers();
-  const origin = headersList.get('origin') || '';
+  const headersList = headers();
+  const origin = (await headersList).get('origin') || '';
   const allowedOrigin = allowedOrigins.includes(origin) ? origin : '*';
 
   return new NextResponse(null, {
